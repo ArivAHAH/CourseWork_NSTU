@@ -30,7 +30,21 @@ docker compose -p traffic_sim down
 ###4. Полная очистка (включая БД)
 docker compose -p traffic_sim down -v
 
+
+## Требования для macOS
+
+Для запуска графического приложения локально необходимо:
+- Qt 6 (Widgets, WebEngine)
+- CMake
+
+Для базы данных используется Docker (PostgreSQL внутри контейнера),
+локальная установка PostgreSQL не требуется.
 # macOS (Docker — только БД, приложение локально)
+### Установка зависимостей (macOS, через Homebrew)
+
+```bash
+brew install cmake qt
+
 ### 1. Запуск базы данных
 ```bash
 docker compose -p traffic_sim up -d db
