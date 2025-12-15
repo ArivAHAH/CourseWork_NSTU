@@ -41,7 +41,6 @@ docker compose -p traffic_sim down -v
 локальная установка PostgreSQL не требуется.
 # macOS (Docker — только БД, приложение локально)
 ### Установка зависимостей (macOS, через Homebrew)
-
 ```bash
 brew install cmake qt
 
