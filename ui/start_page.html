@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Транспортная симуляция города</title>
+  <script type="text/javascript" src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-main: #050816;
+      --glass: rgba(11, 15, 32, 0.92);
+      --accent: #4f8cff;
+      --accent-soft: #4f8cff33;
+      --accent-2: #0affc2;
+      --text-main: #f5f5f5;
+      --text-muted: #b4b7c8;
+      --radius-xl: 32px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 0% 0%, #2b5cff33 0, transparent 55%),
+        radial-gradient(circle at 100% 100%, #0affc233 0, transparent 55%),
+        var(--bg-main);
+      color: var(--text-main);
+      overflow: hidden;
+    }
+
+    .hero {
+      width: 100%;
+      max-width: 1100px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+      gap: 40px;
+      padding: 40px 56px;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(135deg, rgba(7, 9, 20, 0.98), rgba(7, 15, 40, 0.98));
+      box-shadow:
+        0 32px 80px rgba(0, 0, 0, 0.75),
+        0 0 0 1px rgba(255, 255, 255, 0.04);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before,
+    .hero::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(26px);
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    .hero::before {
+      width: 320px;
+      height: 320px;
+      background: radial-gradient(circle, var(--accent-soft) 0, transparent 70%);
+      top: -60px;
+      left: -60px;
+    }
+
+    .hero::after {
+      width: 260px;
+      height: 260px;
+      background: radial-gradient(circle, rgba(10, 255, 194, 0.28) 0, transparent 70%);
+      bottom: -40px;
+      right: -80px;
+    }
+
+    .eva-orbit {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      overflow: hidden;
+      border-radius: 50%;
+      width: 400px;
+      height: 400px;
+      margin: 0 auto;
+    }
+
+    .orbit-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px dashed; 
+      transform-origin: center;
+      animation: orbit-rotate 20s linear infinite;
+      pointer-events: none;
+      box-sizing: border-box;
+    }
+
+    .orbit-ring--outer {
+      width: 360px;
+      height: 360px;
+      border-color: rgba(79, 140, 255, 0.7); 
+      top: 20px;
+      left: 20px;
+    }
+
+    .orbit-ring--inner {
+      width: 280px;
+      height: 280px;
+      border-color: rgba(10, 255, 194, 0.6); 
+      top: 60px;
+      left: 60px;
+      animation-direction: reverse;
+      animation-duration: 15s;
+    }
+
+    .orbit-ring::after {
+      content: '';
+      position: absolute;
+      top: -2px;
+      left: -2px;
+      right: -2px;
+      bottom: -2px;
+      border-radius: 50%;
+      border: 1px solid;
+      filter: blur(2px);
+      opacity: 0.4;
+    }
+
+    .orbit-ring--outer::after {
+      border-color: rgba(79, 140, 255, 0.4);
+    }
+
+    .orbit-ring--inner::after {
+      border-color: rgba(10, 255, 194, 0.4);
+    }
+
+    .orbit-dots-container {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      overflow: visible;
+    }
+
+    .orbit-dot {
+      position: absolute;
+      width: 12px; 
+      height: 12px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #ffffff, var(--accent));
+      box-shadow: 
+        0 0 20px rgba(79, 140, 255, 0.9),
+        0 0 40px rgba(79, 140, 255, 0.5); 
+      animation: dot-orbit linear infinite;
+      z-index: 2;
+    }
+
+    .orbit-dot--outer {
+      width: 10px;
+      height: 10px;
+      animation-duration: 25s;
+      background: radial-gradient(circle at 30% 30%, #ffffff, #805dff);
+      box-shadow: 
+        0 0 15px rgba(128, 93, 255, 0.8),
+        0 0 30px rgba(128, 93, 255, 0.4);
+    }
+
+    .orbit-dot--inner {
+      width: 8px;
+      height: 8px;
+      animation-duration: 20s;
+      background: radial-gradient(circle at 30% 30%, #ffffff, var(--accent-2));
+      box-shadow: 
+        0 0 12px rgba(10, 255, 194, 0.8),
+        0 0 25px rgba(10, 255, 194, 0.4);
+    }
+
+    .orbit-dot:nth-child(1) {
+      top: 0%;
+      left: 50%;
+      transform: translateX(-50%);
+      animation-name: dot-orbit-1;
+    }
+
+    .orbit-dot:nth-child(2) {
+      top: 50%;
+      right: 0%;
+      transform: translateY(-50%);
+      animation-name: dot-orbit-2;
+      animation-delay: -5s;
+    }
+
+    .orbit-dot:nth-child(3) {
+      bottom: 0%;
+      left: 50%;
+      transform: translateX(-50%);
+      animation-name: dot-orbit-3;
+      animation-delay: -10s;
+    }
+
+    .orbit-dot:nth-child(4) {
+      top: 50%;
+      left: 0%;
+      transform: translateY(-50%);
+      animation-name: dot-orbit-4;
+      animation-delay: -15s;
+    }
+
+    .eva-wrapper {
+      position: relative;
+      width: 220px;
+      max-width: 80%;
+      z-index: 3;
+      animation: float 4s ease-in-out infinite;
+      margin: 0 auto;
+    }
+
+    .eva-img {
+      width: 100%;
+      max-width: 180px;
+      display: block;
+      margin: 0 auto;
+      background: transparent;
+      border-radius: 0;
+      box-shadow: none;
+      filter: drop-shadow(0 20px 50px rgba(0, 0, 0, 0.9));
+    }
+
+    .eva-shadow {
+      position: absolute;
+      bottom: -16px;
+      left: 50%;
+      width: 160px;
+      height: 35px;
+      transform: translateX(-50%);
+      background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.8) 0, transparent 70%);
+      opacity: 0.7;
+      filter: blur(3px);
+      animation: shadowPulse 4s ease-in-out infinite;
+      z-index: 1;
+    }
+
+    .hero-text {
+      position: relative;
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .badge-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(16, 30, 80, 0.8);
+      border: 1px solid rgba(79, 140, 255, 0.4);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-2);
+    }
+
+    .badge-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: radial-gradient(circle, var(--accent-2), #00b894);
+      box-shadow: 0 0 12px rgba(10, 255, 194, 0.9);
+    }
+
+    h1 {
+      font-size: 32px;
+      line-height: 1.18;
+    }
+
+    h1 span {
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      line-height: 1.7;
+      color: var(--text-muted);
+      max-width: 440px;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(24, 32, 68, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 11px;
+      color: #d0d2df;
+    }
+
+    .button-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 16px;
+      align-items: flex-start;
+    }
+
+    .primary-btn {
+      padding: 10px 24px;
+      border-radius: 999px;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #ffffff;
+      background: linear-gradient(135deg, var(--accent), #805dff);
+      box-shadow:
+        0 14px 30px rgba(71, 119, 255, 0.6),
+        0 0 0 1px rgba(255, 255, 255, 0.06);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+      animation: pulse 2.8s ease-in-out infinite alternate;
+    }
+
+    .primary-btn span {
+      font-size: 16px;
+    }
+
+    .primary-btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.08);
+      box-shadow:
+        0 18px 36px rgba(71, 119, 255, 0.75),
+        0 0 0 1px rgba(255, 255, 255, 0.1);
+    }
+
+    .primary-btn:active {
+      transform: translateY(1px) scale(0.99);
+      box-shadow:
+        0 8px 18px rgba(71, 119, 255, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.1);
+      animation: none;
+    }
+
+    .primary-btn.clicked {
+      animation: none;
+      transform: translateY(0) scale(1.02);
+    }
+
+    .meta-row {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .meta-block {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 120px;
+    }
+
+    .meta-label {
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 10px;
+      color: #8084a0;
+    }
+
+    .meta-value {
+      font-size: 12px;
+      color: #dee0ee;
+    }
+
+    @keyframes float {
+      0%   { transform: translateY(0px); }
+      50%  { transform: translateY(-14px); }
+      100% { transform: translateY(0px); }
+    }
+
+    @keyframes shadowPulse {
+      0%   { transform: translateX(-50%) scale(1);   opacity: 0.72; }
+      50%  { transform: translateX(-50%) scale(0.9); opacity: 0.55; }
+      100% { transform: translateX(-50%) scale(1);   opacity: 0.72; }
+    }
+
+    @keyframes orbit-rotate {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+
+    @keyframes dot-orbit-1 {
+      0%   { transform: translateX(-50%) rotate(0deg) translateY(-180px) rotate(0deg); }
+      100% { transform: translateX(-50%) rotate(360deg) translateY(-180px) rotate(-360deg); }
+    }
+
+    @keyframes dot-orbit-2 {
+      0%   { transform: translateY(-50%) rotate(0deg) translateX(180px) rotate(0deg); }
+      100% { transform: translateY(-50%) rotate(360deg) translateX(180px) rotate(-360deg); }
+    }
+
+    @keyframes dot-orbit-3 {
+      0%   { transform: translateX(-50%) rotate(0deg) translateY(180px) rotate(0deg); }
+      100% { transform: translateX(-50%) rotate(360deg) translateY(180px) rotate(-360deg); }
+    }
+
+    @keyframes dot-orbit-4 {
+      0%   { transform: translateY(-50%) rotate(0deg) translateX(-180px) rotate(0deg); }
+      100% { transform: translateY(-50%) rotate(360deg) translateX(-180px) rotate(-360deg); }
+    }
+
+    .orbit-dot.orbit-dot--outer:nth-child(1) {
+      animation: dot-orbit-1 30s linear infinite;
+    }
+
+    .orbit-dot.orbit-dot--outer:nth-child(2) {
+      animation: dot-orbit-2 30s linear infinite reverse;
+      animation-delay: -7.5s;
+    }
+
+    .orbit-dot.orbit-dot--outer:nth-child(3) {
+      animation: dot-orbit-3 30s linear infinite;
+      animation-delay: -15s;
+    }
+
+    .orbit-dot.orbit-dot--outer:nth-child(4) {
+      animation: dot-orbit-4 30s linear infinite reverse;
+      animation-delay: -22.5s;
+    }
+
+    .orbit-dot.orbit-dot--inner:nth-child(5) {
+      animation: dot-orbit-1 20s linear infinite reverse;
+      transform: translateX(-50%) rotate(0deg) translateY(-140px) rotate(0deg);
+    }
+
+    .orbit-dot.orbit-dot--inner:nth-child(6) {
+      animation: dot-orbit-2 20s linear infinite;
+      transform: translateY(-50%) rotate(0deg) translateX(140px) rotate(0deg);
+      animation-delay: -5s;
+    }
+
+    .orbit-dot.orbit-dot--inner:nth-child(7) {
+      animation: dot-orbit-3 20s linear infinite reverse;
+      transform: translateX(-50%) rotate(0deg) translateY(140px) rotate(0deg);
+      animation-delay: -10s;
+    }
+
+    .orbit-dot.orbit-dot--inner:nth-child(8) {
+      animation: dot-orbit-4 20s linear infinite;
+      transform: translateY(-50%) rotate(0deg) translateX(-140px) rotate(0deg);
+      animation-delay: -15s;
+    }
+
+    @keyframes pulse {
+      from { box-shadow: 0 14px 30px rgba(71,119,255,0.45); }
+      to   { box-shadow: 0 18px 40px rgba(71,119,255,0.75); }
+    }
+
+    @media (max-width: 900px) {
+      .hero {
+        grid-template-columns: 1fr;
+        padding: 24px 20px;
+      }
+
+      .eva-orbit {
+        order: -1;
+        width: 300px;
+        height: 300px;
+      }
+
+      .orbit-ring--outer {
+        width: 260px;
+        height: 260px;
+        top: 20px;
+        left: 20px;
+      }
+
+      .orbit-ring--inner {
+        width: 200px;
+        height: 200px;
+        top: 50px;
+        left: 50px;
+      }
+
+      @keyframes dot-orbit-1 {
+        0%   { transform: translateX(-50%) rotate(0deg) translateY(-130px) rotate(0deg); }
+        100% { transform: translateX(-50%) rotate(360deg) translateY(-130px) rotate(-360deg); }
+      }
+
+      @keyframes dot-orbit-2 {
+        0%   { transform: translateY(-50%) rotate(0deg) translateX(130px) rotate(0deg); }
+        100% { transform: translateY(-50%) rotate(360deg) translateX(130px) rotate(-360deg); }
+      }
+
+      @keyframes dot-orbit-3 {
+        0%   { transform: translateX(-50%) rotate(0deg) translateY(130px) rotate(0deg); }
+        100% { transform: translateX(-50%) rotate(360deg) translateY(130px) rotate(-360deg); }
+      }
+
+      @keyframes dot-orbit-4 {
+        0%   { transform: translateY(-50%) rotate(0deg) translateX(-130px) rotate(0deg); }
+        100% { transform: translateY(-50%) rotate(360deg) translateX(-130px) rotate(-360deg); }
+      }
+
+      .orbit-dot.orbit-dot--inner:nth-child(5) {
+        transform: translateX(-50%) rotate(0deg) translateY(-100px) rotate(0deg);
+      }
+
+      .orbit-dot.orbit-dot--inner:nth-child(6) {
+        transform: translateY(-50%) rotate(0deg) translateX(100px) rotate(0deg);
+      }
+
+      .orbit-dot.orbit-dot--inner:nth-child(7) {
+        transform: translateX(-50%) rotate(0deg) translateY(100px) rotate(0deg);
+      }
+
+      .orbit-dot.orbit-dot--inner:nth-child(8) {
+        transform: translateY(-50%) rotate(0deg) translateX(-100px) rotate(0deg);
+      }
+
+      .hero-text {
+        align-items: flex-start;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 10px;
+      }
+
+      .hero {
+        border-radius: 22px;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+      
+      .button-group {
+        width: 100%;
+      }
+      
+      .primary-btn {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .eva-orbit {
+        width: 250px;
+        height: 250px;
+      }
+
+      .orbit-ring--outer {
+        width: 210px;
+        height: 210px;
+      }
+
+      .orbit-ring--inner {
+        width: 160px;
+        height: 160px;
+      }
+
+      .orbit-dot {
+        width: 8px;
+        height: 8px;
+      }
+
+      .orbit-dot.orbit-dot--outer {
+        width: 7px;
+        height: 7px;
+      }
+
+      .orbit-dot.orbit-dot--inner {
+        width: 6px;
+        height: 6px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="hero">
+    <section class="eva-orbit" aria-label="Анимированный робот с макетом города">
+      <div class="orbit-ring orbit-ring--outer"></div>
+      <div class="orbit-ring orbit-ring--inner"></div>
+      
+      <div class="orbit-dots-container">
+
+        <div class="orbit-dot orbit-dot--outer"></div>
+        <div class="orbit-dot orbit-dot--outer"></div>
+        <div class="orbit-dot orbit-dot--outer"></div>
+        <div class="orbit-dot orbit-dot--outer"></div>
+        
+        <div class="orbit-dot orbit-dot--inner"></div>
+        <div class="orbit-dot orbit-dot--inner"></div>
+        <div class="orbit-dot orbit-dot--inner"></div>
+        <div class="orbit-dot orbit-dot--inner"></div>
+      </div>
+
+      <div class="eva-wrapper">
+        <img src="assets/eva_city.png" alt="Робот с миниатюрным городом в руках" class="eva-img">
+        <div class="eva-shadow"></div>
+      </div>
+    </section>
+
+    <section class="hero-text">
+      <div class="badge-row">
+        <span class="badge-dot"></span>
+        <span>Симуляция автомобильного трафика</span>
+      </div>
+
+      <h1>
+      «Ева»: <span>симуляция автомобильного трафика</span> в городской среде
+      </h1>
+
+      <p class="subtitle">
+        Цифровая Ева держит в руках не просто макет —
+        она управляет полноценной транспортной экосистемой.
+        Каждый автомобиль здесь следует собственным целям,
+        каждый светофор адаптируется к потоку,
+        каждая пробка имеет свою причину и математическое объяснение.
+      </p>
+
+      <div class="pill-row">
+        <div class="pill">OD-матрица поездок</div>
+        <div class="pill">Светофоры и перекрёстки</div>
+        <div class="pill">Аварии и дорожные работы</div>
+        <div class="pill">Гололёд и снижение скорости</div>
+      </div>
+      
+      <div class="button-group">
+        <button id="startButton" class="primary-btn" type="button">
+          <span>Запустить симуляцию</span>
+          <span>→</span>
+        </button>
+        <button id="buildButton" class="primary-btn" type="button">
+          <span>Режим строительства</span>
+          <span>🏗</span>
+        </button>
+        <button id="settingsButton" class="primary-btn" type="button">
+          <span>Настройки</span>
+          <span>⚙️</span>
+        </button>
+        <button id="exitButton" class="primary-btn" type="button">
+          <span>Выход</span>
+          <span>🚪</span>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let qtBridge = null;  
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        qtBridge = channel.objects.bridge;
+        
+        document.getElementById("exitButton").addEventListener("click", function() {
+            if (qtBridge) {
+                qtBridge.requestExit();
+            }
+        });
+  
+        document.getElementById("startButton").addEventListener("click", function() {
+            if (qtBridge) {
+                qtBridge.requestStart();
+            }
+        });
+  
+        document.getElementById("settingsButton").addEventListener("click", function() {
+            if (qtBridge) {
+                qtBridge.requestSettings();
+            }
+        });
+  
+        const buildBtn = document.getElementById("buildButton");
+        if (buildBtn) {
+            buildBtn.addEventListener("click", function() {
+                if (qtBridge) {
+                    qtBridge.requestBuildMode();
+                }
+            });
+        }
+    });  
+    document.addEventListener("DOMContentLoaded", function () {
+        const buttons = ["startButton", "buildButton", "settingsButton", "exitButton"];
+        buttons.forEach(id => {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.addEventListener("click", function () {
+                    btn.classList.add("clicked");
+                    setTimeout(() => btn.classList.remove("clicked"), 220);
+                });
+            }
+        });
+    });
+  </script>
+</body>
+</html>

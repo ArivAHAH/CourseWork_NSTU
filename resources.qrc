@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/">
+    <file>ui/start_page.html</file>
+    <file>ui/assets/eva_city.png</file>
+  </qresource>
+</RCC>
