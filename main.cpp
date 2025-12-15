@@ -5,7 +5,7 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
 
-    QApplication::setApplicationName("Симуляция трафика Новосибирска");
+    QApplication::setApplicationName("Симуляция трафика");
     QApplication::setOrganizationName("NSTU");
 
     MainWindow w;
