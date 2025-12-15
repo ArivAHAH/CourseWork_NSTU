@@ -100,7 +100,7 @@ private:
     float baseOffsetY_ = 0.0f;
 
     float zoom_    = 1.0f;
-    float minZoom_ = 0.4f;
+    float minZoom_ = 0.15f;
     float maxZoom_ = 12.0f;
 
     QPixmap trafficLightIcon_;

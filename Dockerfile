@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     qt6-base-dev qt6-tools-dev qt6-tools-dev-tools \
     qt6-webengine-dev \
     qt6-webengine-dev-tools \
+    libqt6webenginecore6 \
+    libqt6webenginewidgets6 \
     libqt6sql6-psql \
     libbox2d-dev \
     libgl1-mesa-dev \

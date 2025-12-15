@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASS}
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -25,6 +25,11 @@ services:
 
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: "1"
+
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+      QTWEBENGINEPROCESS_PATH: /usr/lib/qt6/libexec/QtWebEngineProcess
+      XDG_RUNTIME_DIR: /tmp/runtime-root
+
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     devices:
