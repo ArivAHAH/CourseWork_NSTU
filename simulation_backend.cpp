@@ -427,7 +427,7 @@ void SimulationBackend::registerVehicleConfigs()
     passenger.name = "Легковая";
     passenger.kind = VehicleKind::Passenger;
     passenger.modelId = "passenger";
-    passenger.baseSpeedMps = 30.0f;
+    passenger.baseSpeedMps = 24.0f;
     passenger.length = 4.0f;
     passenger.width = 1.8f;
     cfgIds_.passenger = world_.registerVehicleConfig(passenger);
@@ -436,7 +436,7 @@ void SimulationBackend::registerVehicleConfigs()
     taxi.name = "Такси";
     taxi.kind = VehicleKind::Taxi;
     taxi.modelId = "taxi";
-    taxi.baseSpeedMps = 32.0f;
+    taxi.baseSpeedMps = 26.0f;
     taxi.length = 4.2f;
     taxi.width = 1.8f;
     cfgIds_.taxi = world_.registerVehicleConfig(taxi);

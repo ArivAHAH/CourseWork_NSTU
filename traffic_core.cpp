@@ -214,7 +214,7 @@ const Path* Vehicle::nextPathInRoute() const
 // оценивает желаемую скорость автомобиля с учётом условий и ограничений на пути
 float Vehicle::effectiveSpeed(const TrafficConditions& conditions) const
 {
-    constexpr float kVisualSpeedBoost = 3.0f;
+    constexpr float kVisualSpeedBoost = 2.0f;
 
     float v = config_.baseSpeedMps * conditions.speedFactor();
 
@@ -250,14 +250,12 @@ void Vehicle::step(
     }
 
     const float vFree = effectiveSpeed(conditions);
+    const float halfLen = config_.length * 0.5f;
+    const float myFront = distance_ + halfLen;
 
-    const float proposedDist = distance_ + vFree * dtSeconds;
-    float stopDist = proposedDist;
+    float stopDist = distance_ + vFree * dtSeconds;
 
     if (!lights.empty() && lights.size() == colors.size()) {
-        const float halfLen = config_.length * 0.5f;
-        const float myFront = distance_ + halfLen;
-
         int bestIdx = -1;
         float bestDelta = std::numeric_limits<float>::infinity();
 
@@ -265,9 +263,9 @@ void Vehicle::step(
             const TrafficLight& tl = lights[i];
             if (tl.pathId != p->id) continue;
 
-            const float delta = tl.distanceOnPath - myFront;
-
-            if (delta < 0.0f) continue;
+            float delta = tl.distanceOnPath - myFront;
+            if (delta < -2.0f) continue;
+            if (delta > 80.0f) continue;
 
             if (delta < bestDelta) {
                 bestDelta = delta;
@@ -277,21 +275,29 @@ void Vehicle::step(
 
         if (bestIdx >= 0) {
             const LightColor c = colors[static_cast<std::size_t>(bestIdx)];
-            if (c == LightColor::Red || c == LightColor::Yellow) {
-                const float stopMargin = 6.0f; 
-                float stopAt = lights[static_cast<std::size_t>(bestIdx)].distanceOnPath
-                             - halfLen
-                             - stopMargin;
+            const float lightPos = lights[static_cast<std::size_t>(bestIdx)].distanceOnPath;
+            const float stopMargin = 3.0f;
+            float stopAt = lightPos - halfLen - stopMargin;
+            if (stopAt < 0.0f) stopAt = 0.0f;
 
-                if (stopAt < 0.0f) stopAt = 0.0f;
+            bool pastStopLine = (distance_ > stopAt);
 
-                stopDist = std::min(stopDist, stopAt);
+            if (!pastStopLine) {
+                if (c == LightColor::Red) {
+                    stopDist = std::min(stopDist, stopAt);
+                } else if (c == LightColor::Yellow) {
+                    float distToStop = stopAt - distance_;
+                    float brakingDist = (speed_ * speed_) / (2.0f * maxDecel_);
+                    if (distToStop > brakingDist + 1.0f) {
+                        stopDist = std::min(stopDist, stopAt);
+                    }
+                }
             }
         }
     }
-    
-    if (stopDist > maxDistance) stopDist = maxDistance;
-    if (stopDist < distance_)   stopDist = distance_;
+
+    if (maxDistance < stopDist) stopDist = maxDistance;
+    if (stopDist < distance_) stopDist = distance_;
 
     float vAllowed = (stopDist - distance_) / dtSeconds;
     float vTarget  = std::min(vFree, vAllowed);
@@ -713,14 +719,7 @@ int TrafficWorld::addTrafficLight(int dbId, const Vec2& pos)
         tl.pathId         = c.pathId;
         tl.distanceOnPath = c.distanceAlong;
 
-        const Path* p = getPath(c.pathId);
-        if (p) {
-            int key = std::min(p->originPlaceId, p->destinationPlaceId);
-            if (key < 0) key = -key;
-            tl.groupId = key % 4;
-        } else {
-            tl.groupId = 0;
-        }
+        tl.groupId = dbId % 2;
 
         trafficLights_.push_back(tl);
 
@@ -858,7 +857,7 @@ void TrafficWorld::buildIntersections()
     }
 }
 
-// строит маршрут между двумя местами по графу дорог.
+// строит маршрут между двумя местами по графу дорог
 bool TrafficWorld::buildRoute(
     int originPlaceId,
     int destinationPlaceId,
@@ -972,42 +971,33 @@ bool TrafficWorld::buildRoute(
     return !out.empty();
 }
 
-// возвращает цвет светофора с учётом времени и группы
 LightColor TrafficWorld::trafficLightColor(const TrafficLight& light) const
 {
     if (!lightsEnabled_) {
         return LightColor::Green;
     }
 
-    const SimulationTime& t = conditions_.time;
-    bool morningRush = (t.hour >= 8 && t.hour < 10);
+    const SimulationTime& ti = conditions_.time;
+    bool morningRush = (ti.hour >= 8 && ti.hour < 10);
 
-    const int phaseCount = 4;
-    float green  = morningRush ? 35.0f : 25.0f;
-    float yellow = 4.0f;
-    float allRed = 2.0f;
+    const float greenDuration  = morningRush ? 35.0f : 25.0f;
+    const float yellowDuration = 2.0f;
+    const float redDuration = 30.0f;
+    const float totalPhase = greenDuration + yellowDuration + redDuration;
 
-    float phaseDuration = green + yellow + allRed;
-    float cycle = phaseDuration * phaseCount;
-    if (cycle <= 0.0f) {
+    int group = light.groupId % 2;
+    float offset = group * (greenDuration + yellowDuration);
+
+    float t = std::fmod(simSeconds_ + offset, totalPhase);
+
+    if (t < greenDuration){
         return LightColor::Green;
     }
 
-    int group = light.groupId % phaseCount;
-    if (group < 0) group += phaseCount;
-
-    float phaseTime = std::fmod(simSeconds_, cycle);
-    float localTime = phaseTime - group * phaseDuration;
-    if (localTime < 0.0f) {
-        localTime += cycle;
-    }
-
-    if (localTime < green) {
-        return LightColor::Green;
-    }
-    if (localTime < green + yellow) {
+    if (t < greenDuration + yellowDuration){
         return LightColor::Yellow;
     }
+
     return LightColor::Red;
 }
 
@@ -1095,8 +1085,9 @@ void TrafficWorld::step(float dtSeconds)
 
     simSeconds_ += dtSimSeconds;
 
-    if (simSeconds_ > 1.0e7f) {
-        simSeconds_ = std::fmod(simSeconds_, 10000.0f);
+    const float maxSimSeconds = 124.0f * 1000.0f; 
+    if (simSeconds_ > maxSimSeconds) {
+        simSeconds_ = std::fmod(simSeconds_, maxSimSeconds);
     }
 
     if (autoMode_) {
@@ -1413,16 +1404,22 @@ void TrafficWorld::step(float dtSeconds)
                     const Path* vp = v->path();
                     if (vp && !trafficLights_.empty() && trafficLights_.size() == colors.size()) {
                         float dNow = v->traveledDistance();
-                        const float lookAhead = 35.0f;
+                        int nearestIdx = -1;
+                        float nearestDelta = 1e9f;
+                        
                         for (std::size_t li = 0; li < trafficLights_.size(); ++li) {
                             const TrafficLight& tl = trafficLights_[li];
                             if (tl.pathId != vp->id) continue;
                             float delta = tl.distanceOnPath - dNow;
-                            if (delta < 0.0f || delta > lookAhead) continue;
-                            if (colors[li] == LightColor::Green) {
-                                greenAheadOnMyPath = true;
-                                break;
+                            if (delta < -2.0f || delta > 40.0f) continue;
+                            if (delta < nearestDelta) {
+                                nearestDelta = delta;
+                                nearestIdx = static_cast<int>(li);
                             }
+                        }
+                        
+                        if (nearestIdx >= 0 && colors[nearestIdx] == LightColor::Green) {
+                            greenAheadOnMyPath = true;
                         }
                     }
                 }
