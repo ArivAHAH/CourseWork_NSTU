@@ -229,6 +229,96 @@ void BuildModeView::paintEvent(QPaintEvent* event)
     drawSidePanel(p);
 }
 
+//хелпер соединять сливать узлы в один
+bool BuildModeView::snapAndSplitToRoadNetwork(QPointF& ioPos, qreal radius)
+{
+    const qreal r2 = radius * radius;
+
+    {
+        qreal bestD2 = 1e18;
+        QPointF best = ioPos;
+        bool found = false;
+
+        for (const auto& r : roads_) {
+            for (const QPointF& pt : r.points) {
+                qreal dx = pt.x() - ioPos.x();
+                qreal dy = pt.y() - ioPos.y();
+                qreal d2 = dx*dx + dy*dy;
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    best = pt;
+                    found = true;
+                }
+            }
+        }
+
+        if (found && bestD2 <= r2) {
+            ioPos = best;
+            return true;
+        }
+    }
+
+    int bestRoad = -1;
+    int bestSeg  = -1;         
+    qreal bestD2 = 1e18;
+    QPointF bestProj = ioPos;
+
+    for (int ri = 0; ri < roads_.size(); ++ri) {
+        const auto& pts = roads_[ri].points;
+        for (int i = 0; i + 1 < pts.size(); ++i) {
+            const QPointF a = pts[i];
+            const QPointF b = pts[i + 1];
+
+            const QPointF ab = b - a;
+            const qreal ab2 = ab.x()*ab.x() + ab.y()*ab.y();
+            if (ab2 < 1e-6) continue;
+
+            const QPointF ap = ioPos - a;
+            qreal t = (ap.x()*ab.x() + ap.y()*ab.y()) / ab2;
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+
+            const QPointF proj = a + ab * t;
+
+            qreal dx = proj.x() - ioPos.x();
+            qreal dy = proj.y() - ioPos.y();
+            qreal d2 = dx*dx + dy*dy;
+
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                bestProj = proj;
+                bestRoad = ri;
+                bestSeg  = i;
+            }
+        }
+    }
+
+    if (bestRoad >= 0 && bestD2 <= r2) {
+        auto& pts = roads_[bestRoad].points;
+
+        const QPointF a = pts[bestSeg];
+        const QPointF b = pts[bestSeg + 1];
+
+        auto dist2 = [](const QPointF& p, const QPointF& q){
+            qreal dx = p.x() - q.x();
+            qreal dy = p.y() - q.y();
+            return dx*dx + dy*dy;
+        };
+
+        if (dist2(bestProj, a) < 4.0 || dist2(bestProj, b) < 4.0) {
+            ioPos = (dist2(bestProj, a) < dist2(bestProj, b)) ? a : b;
+            return true;
+        }
+
+        pts.insert(bestSeg + 1, bestProj);
+        ioPos = bestProj;
+        return true;
+    }
+
+    return false;
+}
+
+
 // обрабатывает нажатия мыши
 void BuildModeView::mousePressEvent(QMouseEvent* event)
 {
@@ -401,15 +491,44 @@ void BuildModeView::addHouseAt(const QPointF& pos)
         currentPairCount_ = 0;
     }
 
+    QPointF snapped = pos;
+    {
+        const qreal snapRadius = 60.0;
+        const qreal r2 = snapRadius * snapRadius;
+
+        qreal bestD2 = 1e18;
+        bool found = false;
+
+        for (const auto& r : roads_) {
+            for (const QPointF& pt : r.points) {
+                const qreal dx = pt.x() - pos.x();
+                const qreal dy = pt.y() - pos.y();
+                const qreal d2 = dx*dx + dy*dy;
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    snapped = pt;
+                    found = true;
+                }
+            }
+        }
+
+        if (!found || bestD2 > r2) {
+            snapped = pos;
+        }
+    }
+
     House h;
-    h.pos = pos;
+    h.pos = snapped;
     h.color = currentPairColor_;
     houses_.push_back(h);
 
     ++currentPairCount_;
-
     update();
 }
+
+
+
+
 
 // добавляет светофор и пытается определить группу по ближайшей дороге
 void BuildModeView::addLightAt(const QPointF& pos)
@@ -503,8 +622,9 @@ void BuildModeView::finishRoad(const QPointF& pos)
         return point;
     };
 
-    start = snapToRoadAnyPoint(start);
-    end = snapToRoadAnyPoint(end);
+    snapAndSplitToRoadNetwork(start, snapRadius);
+    snapAndSplitToRoadNetwork(end,   snapRadius);
+
 
     currentRoad_.front() = start;
     currentRoad_.push_back(end);
@@ -839,13 +959,17 @@ void BuildModeView::rebuildCars()
         return;
     }
 
-    auto addEdge = [&](int a, int b) {
-        if (a == b) return;
-        if (!nodes[a].adj.contains(b))
-            nodes[a].adj.push_back(b);
-        if (!nodes[b].adj.contains(a))
-            nodes[b].adj.push_back(a);
+    auto addDirectedEdge = [&](int a, int b) {
+    if (a == b) return;
+    if (!nodes[a].adj.contains(b))
+        nodes[a].adj.push_back(b);
     };
+
+    auto addUndirectedEdge = [&](int a, int b) {
+        addDirectedEdge(a, b);
+        addDirectedEdge(b, a);
+    };
+
 
     for (int ri = 0; ri < baseRoadCount_; ++ri) {
         int start = roadStart[ri];
@@ -853,8 +977,15 @@ void BuildModeView::rebuildCars()
         if (start < 0 || cnt < 2)
             continue;
 
-        for (int i = 1; i < cnt; ++i) {
-            addEdge(start + i - 1, start + i);
+        for (int i = 0; i < cnt - 1; ++i) {
+            int a = start + i;
+            int b = start + i + 1;
+
+            if (roads_[ri].oneWayCCW) {
+                addDirectedEdge(a, b);
+            } else {
+                addUndirectedEdge(a, b);
+            }
         }
     }
 
@@ -867,7 +998,7 @@ void BuildModeView::rebuildCars()
                 continue;
 
             if (dist2(nodes[i].pos, nodes[j].pos) <= joinR2) {
-                addEdge(i, j);
+                addUndirectedEdge(i, j);
             }
         }
     }
@@ -1006,8 +1137,27 @@ void BuildModeView::tickSimulation()
         speedFactor = cond.speedFactor();
     }
 
-    const float baseStepPixels = 2.0f;
-    const float minGapPixels = 16.0f;
+    const float baseStepPixels   = 2.0f;
+    const float minGapPixels     = 16.0f;
+    const float laneOffset       = 4.0f; 
+    const float perpTolSameLane  = 6.0f;  
+    const float alignTol         = 0.5f;  
+
+    auto lanePosAt = [&](const Road& r, float t, int dirSign) -> QPointF {
+        QPointF pos = roadPointAt(r, t);
+
+        float t0 = qMax(0.0f, t - 0.01f);
+        QPointF back = roadPointAt(r, t0);
+
+        QPointF d = pos - back;
+        double dlen = std::sqrt(d.x()*d.x() + d.y()*d.y());
+        if (dlen > 1e-3) d /= dlen;
+        else d = QPointF(1, 0);
+
+        QPointF normal(-d.y(), d.x());
+        pos += normal * laneOffset * (dirSign > 0 ? 1.0 : -1.0);
+        return pos;
+    };
 
     QHash<int, QVector<int>> byRoad;
     for (int i = 0; i < cars_.size(); ++i) {
@@ -1019,8 +1169,7 @@ void BuildModeView::tickSimulation()
 
     bool anyAlive = false;
 
-    auto it = byRoad.begin();
-    for (; it != byRoad.end(); ++it) {
+    for (auto it = byRoad.begin(); it != byRoad.end(); ++it) {
         int roadIdx = it.key();
         Road& r = roads_[roadIdx];
 
@@ -1052,16 +1201,13 @@ void BuildModeView::tickSimulation()
             QPointF posNow = roadPointAt(r, c.t);
             QPointF dir = roadDirectionAt(r, c.t);
             double dirLen = std::sqrt(dir.x() * dir.x() + dir.y() * dir.y());
-            if (dirLen > 1e-3) {
-                dir /= dirLen;
-            } else {
-                dir = QPointF(1, 0);
-            }
+            if (dirLen > 1e-3) dir /= dirLen;
+            else dir = QPointF(1, 0);
 
             for (const Light& l : lights_) {
                 QPointF v = l.pos - posNow;
                 double proj = v.x() * dir.x() + v.y() * dir.y();
-                if (proj < 0 || proj > 40.0) continue;
+                if (proj < 0.0 || proj > 40.0) continue;
 
                 double perp = std::abs(v.x() * dir.y() - v.y() * dir.x());
                 if (perp > 12.0) continue;
@@ -1077,21 +1223,55 @@ void BuildModeView::tickSimulation()
 
             if (leader) {
                 double allowedCenter = leaderS - minGapPixels;
-                if (allowedCenter < sNow) {
-                    allowedCenter = sNow;
+                if (allowedCenter < sNow) allowedCenter = sNow;
+                if (sNew > allowedCenter) sNew = allowedCenter;
+            }
+
+            {
+                double bestProj = 1e18;
+
+                QPointF myLanePos = lanePosAt(r, c.t, c.dirSign);
+
+                for (int j = 0; j < cars_.size(); ++j) {
+                    if (j == idxCar) continue;
+                    const Car& o = cars_[j];
+                    if (o.finished) continue;
+                    if (o.roadIndex < 0 || o.roadIndex >= roads_.size()) continue;
+
+                    if (o.dirSign != c.dirSign) continue;
+
+                    const Road& oroad = roads_[o.roadIndex];
+
+                    QPointF oDir = roadDirectionAt(oroad, o.t);
+                    double oLen = std::sqrt(oDir.x()*oDir.x() + oDir.y()*oDir.y());
+                    if (oLen > 1e-3) oDir /= oLen;
+                    else oDir = QPointF(1, 0);
+
+                    double align = dir.x()*oDir.x() + dir.y()*oDir.y();
+                    if (align < alignTol) continue;
+
+                    QPointF oLanePos = lanePosAt(oroad, o.t, o.dirSign);
+                    QPointF vTo = oLanePos - myLanePos;
+
+                    double proj = vTo.x() * dir.x() + vTo.y() * dir.y();
+                    if (proj <= 0.0) continue;
+
+                    double perp = std::abs(vTo.x() * dir.y() - vTo.y() * dir.x());
+                    if (perp > perpTolSameLane) continue;
+
+                    if (proj < bestProj) bestProj = proj;
                 }
-                if (sNew > allowedCenter) {
-                    sNew = allowedCenter;
+
+                if (bestProj < 1e17) {
+                    double allowed = sNow + bestProj - minGapPixels;
+                    if (allowed < sNow) allowed = sNow;
+                    if (sNew > allowed) sNew = allowed;
                 }
             }
 
-            if (sNew > len) {
-                sNew = len;
-            }
+            if (sNew > len) sNew = len;
 
-            if (len > 1e-3) {
-                c.t = static_cast<float>(sNew / len);
-            }
+            c.t = static_cast<float>(sNew / len);
 
             if (c.t >= 1.0f - 1e-4f) {
                 c.finished = true;
@@ -1111,6 +1291,9 @@ void BuildModeView::tickSimulation()
 
     update();
 }
+
+
+
 
 // рисует фон билдер-режима в зависимости от времени и сезона
 void BuildModeView::drawBackground(QPainter& p)
@@ -1500,10 +1683,18 @@ void BuildModeView::drawCars(QPainter& p)
         float t0 = qMax(0.0f, c.t - 0.01f);
         QPointF posBack = roadPointAt(r, t0);
 
-        QPointF v = pos - posBack;
+        QPointF dir = pos - posBack;
+        double dlen = std::sqrt(dir.x() * dir.x() + dir.y() * dir.y());
+        if (dlen > 1e-3) dir /= dlen;
+        else dir = QPointF(1, 0);
+
+        QPointF normal(-dir.y(), dir.x());
+        const double laneOffset = 4.0;
+        QPointF drawPos = pos + normal * laneOffset * (c.dirSign > 0 ? 1.0 : -1.0);
+
         double angleDeg = 0.0;
-        if (!qFuzzyIsNull(v.x()) || !qFuzzyIsNull(v.y())) {
-            angleDeg = std::atan2(v.y(), v.x()) * 180.0 / M_PI;
+        if (!qFuzzyIsNull(dir.x()) || !qFuzzyIsNull(dir.y())) {
+            angleDeg = std::atan2(dir.y(), dir.x()) * 180.0 / M_PI;
         }
 
         float len = 12.0f;
@@ -1512,7 +1703,7 @@ void BuildModeView::drawCars(QPainter& p)
         p.save();
         p.setRenderHint(QPainter::Antialiasing, true);
 
-        p.translate(pos);
+        p.translate(drawPos);
         p.rotate(angleDeg);
 
         QRectF body(-len / 2, -wid / 2, len, wid);
@@ -1527,6 +1718,7 @@ void BuildModeView::drawCars(QPainter& p)
         p.restore();
     }
 }
+
 
 // возвращает прямоугольник кнопки “Домой”
 QRectF BuildModeView::homeButtonRect() const
@@ -1711,11 +1903,14 @@ void BuildModeView::addRoundaboutAt(const QPointF& center)
     const qreal radius = 40.0;
 
     Road r;
+    r.oneWayCCW = true;            
     r.points.reserve(segments + 1);
+
     for (int i = 0; i <= segments; ++i) {
         qreal ang = (2.0 * M_PI * i) / segments;
         qreal x = center.x() + radius * std::cos(ang);
-        qreal y = center.y() + radius * std::sin(ang);
+        qreal y = center.y() - radius * std::sin(ang);
+
         r.points.push_back(QPointF(x, y));
     }
 
@@ -1724,6 +1919,7 @@ void BuildModeView::addRoundaboutAt(const QPointF& center)
 
     update();
 }
+
 
 // возвращает направление дороги в точке t
 QPointF BuildModeView::roadDirectionAt(const Road& r, float t) const

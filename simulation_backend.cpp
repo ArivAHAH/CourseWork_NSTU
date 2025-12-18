@@ -26,7 +26,7 @@ bool SimulationBackend::init()
     return true;
 }
 
-// Открываем соединение в БДшкой
+// открываем соединение в БДшкой
 void SimulationBackend::openDatabase(const QString&)
 {
     if (QSqlDatabase::contains("traffic")) {

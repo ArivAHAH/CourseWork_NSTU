@@ -765,7 +765,7 @@ void SimulationView::drawVehicles(QPainter& p, bool cheapMode)
         Vec2 posWorld = v->position();
 
         double angleDeg = 0.0;
-        Vec2 dirWorld{1.0f, 0.0f}; 
+        Vec2 dirWorld{1.0f, 0.0f};
 
         if (path && path->length > 1e-3f) {
             float d = v->traveledDistance();
@@ -798,15 +798,20 @@ void SimulationView::drawVehicles(QPainter& p, bool cheapMode)
 
         if (path) {
             laneCount = std::max(1, path->laneCount);
-            laneWidthMeters = path->laneWidth > 0.1f ? path->laneWidth : 3.5f;
+            laneWidthMeters = (path->laneWidth > 0.1f) ? path->laneWidth : 3.5f;
         }
+
+        if (laneIndex < 0) laneIndex = 0;
+        if (laneIndex >= laneCount) laneIndex = laneCount - 1;
 
         float laneOffsetIndex = 0.0f;
         if (laneCount > 1) {
             laneOffsetIndex = static_cast<float>(laneIndex) - 0.5f * (laneCount - 1);
         }
 
-        float laneOffsetMeters = laneOffsetIndex * laneWidthMeters;
+        const float visualLaneBoost = 1.6f;
+
+        float laneOffsetMeters = laneOffsetIndex * laneWidthMeters * visualLaneBoost;
 
         posWorld.x += nWorld.x * laneOffsetMeters;
         posWorld.y += nWorld.y * laneOffsetMeters;
@@ -819,13 +824,13 @@ void SimulationView::drawVehicles(QPainter& p, bool cheapMode)
         float pixelScale = baseScale_ * zoom_;
 
         float drawLenMeters   = lenMeters   * 0.75f;
-        float drawWidthMeters = widthMeters * 1.15f;
+        float drawWidthMeters = widthMeters * 1.00f; 
 
         float lenPx = std::max(18.0f, drawLenMeters   * pixelScale);
         float widPx = std::max(10.0f, drawWidthMeters * pixelScale);
 
         lenPx = std::clamp(lenPx, 18.0f, 48.0f);
-        widPx = std::clamp(widPx, 10.0f, 26.0f);
+        widPx = std::clamp(widPx, 10.0f, 24.0f); 
 
         QColor bodyColor   = colorForVehicle(v);
         QColor outlineColor(25, 35, 45, 160);
@@ -834,11 +839,13 @@ void SimulationView::drawVehicles(QPainter& p, bool cheapMode)
         p.translate(center);
         p.rotate(angleDeg);
 
-        QBrush shadowBrush(QColor(0, 0, 0, 90));
-        p.setBrush(shadowBrush);
-        p.setPen(Qt::NoPen);
-        QRectF shadowRect(-lenPx * 0.5, -widPx * 0.5 + 1.5, lenPx, widPx);
-        p.drawRoundedRect(shadowRect, widPx * 0.6, widPx * 0.6);
+        if (!cheapMode) {
+            QBrush shadowBrush(QColor(0, 0, 0, 90));
+            p.setBrush(shadowBrush);
+            p.setPen(Qt::NoPen);
+            QRectF shadowRect(-lenPx * 0.5, -widPx * 0.5 + 1.5, lenPx, widPx);
+            p.drawRoundedRect(shadowRect, widPx * 0.6, widPx * 0.6);
+        }
 
         QPen outlinePen(outlineColor);
         outlinePen.setWidthF(1.2);
@@ -858,8 +865,10 @@ void SimulationView::drawVehicles(QPainter& p, bool cheapMode)
 
         p.restore();
     }
+
     p.restore();
 }
+
 
 // обрабатывает зум колесом мыши
 void SimulationView::wheelEvent(QWheelEvent* event)

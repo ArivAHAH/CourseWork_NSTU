@@ -26,6 +26,7 @@ float TrafficWorld::pathCongestionFactor(int pathId) const
     return 1.0f - 0.75f * t;
 }
 
+
 // синхронизирует итоговые флаги условий из авто/ручных источников
 void TrafficWorld::updateConditionsFlags()
 {
@@ -248,59 +249,57 @@ void Vehicle::step(
         return;
     }
 
-    float vFree = effectiveSpeed(conditions);
+    const float vFree = effectiveSpeed(conditions);
 
-    float proposedDist = distance_ + vFree * dtSeconds;
+    const float proposedDist = distance_ + vFree * dtSeconds;
     float stopDist = proposedDist;
 
-    bool hardRedLock = false;
-
     if (!lights.empty() && lights.size() == colors.size()) {
-        const float kExtraStopMargin = 7.0f;
-        const float kHoldEps = 0.45f;        
-        const float kClearAfterLight = 0.6f;  
+        const float halfLen = config_.length * 0.5f;
+        const float myFront = distance_ + halfLen;
+
+        int bestIdx = -1;
+        float bestDelta = std::numeric_limits<float>::infinity();
 
         for (std::size_t i = 0; i < lights.size(); ++i) {
             const TrafficLight& tl = lights[i];
             if (tl.pathId != p->id) continue;
 
-            LightColor c = colors[i];
-            if (!(c == LightColor::Red || c == LightColor::Yellow)) {
-                continue;
+            const float delta = tl.distanceOnPath - myFront;
+
+            if (delta < 0.0f) continue;
+
+            if (delta < bestDelta) {
+                bestDelta = delta;
+                bestIdx = static_cast<int>(i);
             }
+        }
 
-            const float tlDist = tl.distanceOnPath;
+        if (bestIdx >= 0) {
+            const LightColor c = colors[static_cast<std::size_t>(bestIdx)];
+            if (c == LightColor::Red || c == LightColor::Yellow) {
+                const float stopMargin = 6.0f; 
+                float stopAt = lights[static_cast<std::size_t>(bestIdx)].distanceOnPath
+                             - halfLen
+                             - stopMargin;
 
-            if (distance_ > tlDist + kClearAfterLight + config_.length * 0.5f) {
-                continue;
-            }
+                if (stopAt < 0.0f) stopAt = 0.0f;
 
-            float stopAt = tlDist - config_.length * 0.5f - kExtraStopMargin;
-            if (stopAt < 0.0f) stopAt = 0.0f;
-
-            if (stopDist > stopAt) stopDist = stopAt;
-
-            if (distance_ >= stopAt - kHoldEps) {
-                hardRedLock = true;
+                stopDist = std::min(stopDist, stopAt);
             }
         }
     }
-
+    
     if (stopDist > maxDistance) stopDist = maxDistance;
-    if (stopDist < distance_) stopDist = distance_;
-
-    if (hardRedLock) {
-        stopDist = distance_;
-    }
+    if (stopDist < distance_)   stopDist = distance_;
 
     float vAllowed = (stopDist - distance_) / dtSeconds;
     float vTarget  = std::min(vFree, vAllowed);
     if (vTarget < 0.0f) vTarget = 0.0f;
 
     float dv = vTarget - speed_;
-
-    float maxUp   = maxAccel_ * dtSeconds;
-    float maxDown = maxDecel_ * dtSeconds;
+    const float maxUp   = maxAccel_ * dtSeconds;
+    const float maxDown = maxDecel_ * dtSeconds;
 
     if (dv > 0.0f) dv = std::min(dv,  maxUp);
     else           dv = std::max(dv, -maxDown);
@@ -324,28 +323,6 @@ void Vehicle::step(
 
     const float eps = 1e-3f;
 
-    if (speed_ <= 0.01f) {
-        if (distance_ >= p->length - eps) {
-            if (currentSegmentIndex_ + 1 >= static_cast<int>(route_.size())) {
-                finished_ = true;
-                distance_ = p->length;
-                speed_    = 0.0f;
-                return;
-            } else {
-                currentSegmentIndex_++;
-                const Path* nextP = currentPath();
-                if (!nextP) {
-                    finished_ = true;
-                    speed_ = 0.0f;
-                    return;
-                }
-                distance_ = std::min(0.0f, nextP->length);
-                return;
-            }
-        }
-        return;
-    }
-
     if (distance_ >= p->length - eps) {
         if (currentSegmentIndex_ + 1 >= static_cast<int>(route_.size())) {
             finished_ = true;
@@ -355,8 +332,6 @@ void Vehicle::step(
         }
 
         float over = distance_ - p->length;
-        if (over < 0.0f) over = 0.0f;
-
         currentSegmentIndex_++;
 
         const Path* nextP = currentPath();
@@ -369,9 +344,6 @@ void Vehicle::step(
         distance_ = std::min(over, nextP->length);
     }
 }
-
-
-
 
 // возвращает оставшуюся дистанцию по маршруту от текущего положения
 float Vehicle::remainingDistance() const
@@ -1122,9 +1094,9 @@ void TrafficWorld::step(float dtSeconds)
     const float dtSimSeconds = dtSeconds * timeScale_;
 
     simSeconds_ += dtSimSeconds;
-    const float fullCycle = 600.0f;
-    while (simSeconds_ >= fullCycle) {
-        simSeconds_ -= fullCycle;
+
+    if (simSeconds_ > 1.0e7f) {
+        simSeconds_ = std::fmod(simSeconds_, 10000.0f);
     }
 
     if (autoMode_) {
@@ -1139,8 +1111,54 @@ void TrafficWorld::step(float dtSeconds)
 
     const float kMinGapMeters = 6.0f;
 
-    struct VehicleOnPath { Vehicle* v; };
+    auto unitDirAt = [&](const Path* p, float d) -> Vec2 {
+        if (!p || p->length <= 1e-3f) return {1.0f, 0.0f};
+        float d0 = std::max(0.0f, d - 1.0f);
+        float d1 = std::min(p->length, d + 1.0f);
+        Vec2 a = p->positionAt(d0);
+        Vec2 b = p->positionAt(d1);
+        Vec2 v { b.x - a.x, b.y - a.y };
+        float len = std::sqrt(v.x*v.x + v.y*v.y);
+        if (len > 1e-4f) { v.x /= len; v.y /= len; }
+        else v = {1.0f, 0.0f};
+        return v;
+    };
 
+    struct Sample {
+        Vehicle* v;
+        Vec2 pos;
+        Vec2 dir;
+        float halfLen;
+        int lane;
+        int pathId;
+    };
+
+    std::vector<Sample> samples;
+    samples.reserve(vehicles_.size());
+
+    std::unordered_map<Vehicle*, std::size_t> sampleIndex;
+    sampleIndex.reserve(vehicles_.size() * 2);
+
+    for (auto& vPtr : vehicles_) {
+        if (!vPtr) continue;
+        if (vPtr->finished()) continue;
+
+        const Path* p = vPtr->path();
+        if (!p) continue;
+
+        Sample s;
+        s.v = vPtr.get();
+        s.pos = p->positionAt(vPtr->traveledDistance());
+        s.dir = unitDirAt(p, vPtr->traveledDistance());
+        s.halfLen = vPtr->config().length * 0.5f;
+        s.lane = vPtr->laneIndex();
+        s.pathId = p->id;
+
+        sampleIndex[s.v] = samples.size();
+        samples.push_back(s);
+    }
+
+    struct VehicleOnPath { Vehicle* v; };
     std::unordered_map<int, std::vector<VehicleOnPath>> byPath;
     byPath.reserve(paths_.size());
 
@@ -1151,14 +1169,13 @@ void TrafficWorld::step(float dtSeconds)
         const Path* p = vPtr->path();
         if (!p) continue;
 
-        byPath[p->id].push_back(VehicleOnPath{vPtr.get()});
+        byPath[p->id].push_back(VehicleOnPath{ vPtr.get() });
     }
 
     pathVehicleDensity_.clear();
-
     for (auto& kv : byPath) {
         int pathId = kv.first;
-        auto& vec  = kv.second;
+        auto& vec = kv.second;
 
         const Path* pConst = getPath(pathId);
         if (!pConst || pConst->length <= 0.0f) continue;
@@ -1178,200 +1195,149 @@ void TrafficWorld::step(float dtSeconds)
         pathVehicleDensity_[pathId] = rho;
 
         float cong = pathCongestionFactor(pathId);
-
         auto itMut = paths_.find(pathId);
-        if (itMut != paths_.end()) {
-            itMut->second.congestionFactor = cong;
-        }
+        if (itMut != paths_.end()) itMut->second.congestionFactor = cong;
     }
 
-    for (auto& kv : byPath) {
-        int pathId = kv.first;
-        auto& vec  = kv.second;
+    std::unordered_map<int, float> intersectionStopForPath;
 
-        const Path* p = getPath(pathId);
-        int laneCount = p ? std::max(1, p->laneCount) : 1;
+    const bool useIntersectionYield = (trafficLights_.empty() || !lightsEnabled_);
+    if (useIntersectionYield) {
+        const float stopMargin = 3.0f;
+        const float influenceRadius = 40.0f;
 
-        std::unordered_map<int, std::vector<Vehicle*>> laneMap;
-        for (auto& ref : vec) {
-            Vehicle* v = ref.v;
+        for (const auto& inter : intersections_) {
+            struct Candidate {
+                Vehicle* v;
+                float distToEnd;
+                float pathLen;
+                int   pathId;
+                int   priority;
+                TurnType turn;
+            };
 
-            int lane = v->laneIndex();
-            if (lane < 0 || lane >= laneCount) lane = 0;
+            const float insideRadius = 10.0f;
 
-            laneMap[lane].push_back(v);
-        }
+            bool intersectionOccupied = false;
+            std::unordered_map<int, bool> occupantPaths;
 
-        for (auto& lk : laneMap) {
-            auto& laneVec = lk.second;
-            std::sort(laneVec.begin(), laneVec.end(),
-                      [](Vehicle* a, Vehicle* b) {
-                          return a->traveledDistance() < b->traveledDistance();
-                      });
-        }
+            for (int pathId : inter.incomingPaths) {
+                auto itByPath = byPath.find(pathId);
+                if (itByPath == byPath.end()) continue;
 
-        for (auto& lk : laneMap) {
-            int lane = lk.first;
-            auto& laneVec = lk.second;
+                const Path* p = getPath(pathId);
+                if (!p) continue;
 
-            if (laneVec.size() < 2) continue;
+                for (auto& ref : itByPath->second) {
+                    Vehicle* v = ref.v;
+                    float d = v->traveledDistance();
+                    float distToEnd = p->length - d;
+                    if (distToEnd < insideRadius) {
+                        intersectionOccupied = true;
+                        occupantPaths[pathId] = true;
+                    }
+                }
+            }
 
-            for (std::size_t i = 0; i + 1 < laneVec.size(); ++i) {
-                Vehicle* back  = laneVec[i];
-                Vehicle* front = laneVec[i + 1];
+            auto resolveTurn = [&](int inPathId, int outPathId) -> TurnType {
+                for (const auto& mv : inter.movements) {
+                    if (mv.inPathId == inPathId && mv.outPathId == outPathId) return mv.turn;
+                }
+                return TurnType::Straight;
+            };
 
-                float backPos  = back->traveledDistance();
-                float frontPos = front->traveledDistance();
+            std::vector<Candidate> cands;
+            for (int pathId : inter.incomingPaths) {
+                auto itByPath = byPath.find(pathId);
+                if (itByPath == byPath.end()) continue;
 
-                float gap = frontPos - backPos
-                            - 0.5f * front->config().length
-                            - 0.5f * back->config().length;
+                const Path* p = getPath(pathId);
+                if (!p) continue;
 
-                if (gap < kMinGapMeters) {
-                    for (int dir = -1; dir <= 1; dir += 2) {
-                        int otherLane = lane + dir;
-                        if (otherLane < 0 || otherLane >= laneCount) continue;
+                Vehicle* best = nullptr;
+                float bestDist = -1.0f;
 
-                        auto itOther = laneMap.find(otherLane);
-                        bool canChange = true;
+                for (auto& ref : itByPath->second) {
+                    Vehicle* v = ref.v;
+                    float d = v->traveledDistance();
+                    if (d > bestDist) { bestDist = d; best = v; }
+                }
+                if (!best) continue;
 
-                        if (itOther != laneMap.end()) {
-                            auto& otherVec = itOther->second;
+                float distToEnd = std::max(p->length - bestDist, 0.0f);
+                if (distToEnd > influenceRadius) continue;
 
-                            Vehicle* ahead  = nullptr;
-                            Vehicle* behind = nullptr;
+                int prio = 1;
+                auto itPr = inter.pathPriority.find(pathId);
+                if (itPr != inter.pathPriority.end()) prio = itPr->second;
 
-                            for (Vehicle* o : otherVec) {
-                                float pos = o->traveledDistance();
-                                if (pos > backPos) {
-                                    if (!ahead || pos < ahead->traveledDistance()) {
-                                        ahead = o;
-                                    }
-                                } else if (pos < backPos) {
-                                    if (!behind || pos > behind->traveledDistance()) {
-                                        behind = o;
-                                    }
-                                }
-                            }
+                const Path* nextP = best->nextPathInRoute();
+                int outPathId = nextP ? nextP->id : pathId;
 
-                            if (ahead) {
-                                float gAhead = ahead->traveledDistance() - backPos
-                                               - 0.5f * ahead->config().length
-                                               - 0.5f * back->config().length;
-                                if (gAhead < kMinGapMeters) canChange = false;
-                            }
+                TurnType turn = resolveTurn(pathId, outPathId);
+                cands.push_back(Candidate{ best, distToEnd, p->length, pathId, prio, turn });
+            }
 
-                            if (behind) {
-                                float gBehind = backPos - behind->traveledDistance()
-                                                - 0.5f * behind->config().length
-                                                - 0.5f * back->config().length;
-                                if (gBehind < kMinGapMeters) canChange = false;
-                            }
-                        }
+            if (cands.empty()) continue;
 
-                        if (canChange) {
-                            back->setLaneIndex(otherLane);
+            if (intersectionOccupied) {
+                for (const auto& ci : cands) {
+                    if (occupantPaths.count(ci.pathId)) continue;
+
+                    float stopDist = ci.pathLen - (stopMargin + ci.v->config().length * 0.5f);
+                    stopDist = std::max(stopDist, 0.0f);
+
+                    auto itStop = intersectionStopForPath.find(ci.pathId);
+                    if (itStop == intersectionStopForPath.end()) intersectionStopForPath[ci.pathId] = stopDist;
+                    else itStop->second = std::min(itStop->second, stopDist);
+                }
+                continue;
+            }
+
+            std::vector<bool> canGo(cands.size(), true);
+            for (std::size_t i = 0; i < cands.size(); ++i) {
+                for (std::size_t j = 0; j < cands.size(); ++j) {
+                    if (i == j) continue;
+                    const auto& ci = cands[i];
+                    const auto& cj = cands[j];
+
+                    bool bothInZone = (ci.distToEnd <= influenceRadius && cj.distToEnd <= influenceRadius);
+                    if (!bothInZone) continue;
+
+                    if (cj.priority > ci.priority) { canGo[i] = false; break; }
+
+                    if (cj.priority == ci.priority) {
+                        if (ci.turn == TurnType::Left &&
+                            (cj.turn == TurnType::Straight || cj.turn == TurnType::Right)) {
+                            canGo[i] = false;
                             break;
                         }
                     }
                 }
             }
-        }
-    }
 
-    std::unordered_map<int, float> intersectionStopForPath;
+            int winnerIndex = -1;
+            float bestScore = -1e9f;
+            for (std::size_t i = 0; i < cands.size(); ++i) {
+                if (!canGo[i]) continue;
+                const auto& c = cands[i];
 
-    const float influenceRadius = 40.0f;
-    const float stopMargin      = 3.0f;
-
-    for (const auto& inter : intersections_) {
-        struct Candidate {
-            Vehicle* v;
-            float distToEnd;
-            float pathLen;
-            int   pathId;
-            int   priority;
-            TurnType turn;
-        };
-
-        const float insideRadius = 10.0f;
-
-        bool intersectionOccupied = false;
-        std::unordered_map<int, bool> occupantPaths;
-
-        for (int pathId : inter.incomingPaths) {
-            auto itByPath = byPath.find(pathId);
-            if (itByPath == byPath.end()) continue;
-
-            const Path* p = getPath(pathId);
-            if (!p) continue;
-
-            for (auto& ref : itByPath->second) {
-                Vehicle* v = ref.v;
-                float d = v->traveledDistance();
-                float distToEnd = p->length - d;
-                if (distToEnd < insideRadius) {
-                    intersectionOccupied = true;
-                    occupantPaths[pathId] = true;
+                float turnBonus = 0.0f;
+                switch (c.turn) {
+                    case TurnType::Right:    turnBonus = 0.2f;  break;
+                    case TurnType::Straight: turnBonus = 0.1f;  break;
+                    case TurnType::Left:     turnBonus = 0.0f;  break;
+                    case TurnType::UTurn:    turnBonus = -0.2f; break;
                 }
-            }
-        }
 
-        std::vector<Candidate> cands;
-
-        auto resolveTurn = [&](int inPathId, int outPathId) -> TurnType {
-            for (const auto& mv : inter.movements) {
-                if (mv.inPathId == inPathId && mv.outPathId == outPathId) {
-                    return mv.turn;
-                }
-            }
-            return TurnType::Straight;
-        };
-
-        for (int pathId : inter.incomingPaths) {
-            auto itByPath = byPath.find(pathId);
-            if (itByPath == byPath.end()) continue;
-
-            const Path* p = getPath(pathId);
-            if (!p) continue;
-
-            Vehicle* best = nullptr;
-            float bestDist = -1.0f;
-
-            for (auto& ref : itByPath->second) {
-                Vehicle* v = ref.v;
-                float d = v->traveledDistance();
-                if (d > bestDist) {
-                    bestDist = d;
-                    best = v;
-                }
+                float score = c.priority * 10.0f + turnBonus * 5.0f - c.distToEnd * 0.1f;
+                if (score > bestScore) { bestScore = score; winnerIndex = (int)i; }
             }
 
-            if (!best) continue;
-
-            float distToEnd = p->length - bestDist;
-            distToEnd = std::max(distToEnd, 0.0f);
-            if (distToEnd > influenceRadius) continue;
-
-            int prio = 1;
-            auto itPr = inter.pathPriority.find(pathId);
-            if (itPr != inter.pathPriority.end()) {
-                prio = itPr->second;
-            }
-
-            const Path* nextP = best->nextPathInRoute();
-            int outPathId = nextP ? nextP->id : pathId;
-
-            TurnType turn = resolveTurn(pathId, outPathId);
-
-            cands.push_back(Candidate{ best, distToEnd, p->length, pathId, prio, turn });
-        }
-
-        if (cands.empty()) continue;
-
-        if (intersectionOccupied) {
-            for (const auto& ci : cands) {
-                if (occupantPaths.count(ci.pathId)) continue;
+            for (std::size_t i = 0; i < cands.size(); ++i) {
+                const auto& ci = cands[i];
+                bool mustYield = !canGo[i] || ((int)i != winnerIndex);
+                if (!mustYield) continue;
 
                 float stopDist = ci.pathLen - (stopMargin + ci.v->config().length * 0.5f);
                 stopDist = std::max(stopDist, 0.0f);
@@ -1380,64 +1346,9 @@ void TrafficWorld::step(float dtSeconds)
                 if (itStop == intersectionStopForPath.end()) intersectionStopForPath[ci.pathId] = stopDist;
                 else itStop->second = std::min(itStop->second, stopDist);
             }
-            continue;
-        }
-
-        std::vector<bool> canGo(cands.size(), true);
-
-        for (std::size_t i = 0; i < cands.size(); ++i) {
-            for (std::size_t j = 0; j < cands.size(); ++j) {
-                if (i == j) continue;
-                const auto& ci = cands[i];
-                const auto& cj = cands[j];
-
-                bool bothInZone = (ci.distToEnd <= influenceRadius && cj.distToEnd <= influenceRadius);
-                if (!bothInZone) continue;
-
-                if (cj.priority > ci.priority) { canGo[i] = false; break; }
-
-                if (cj.priority == ci.priority) {
-                    if (ci.turn == TurnType::Left &&
-                        (cj.turn == TurnType::Straight || cj.turn == TurnType::Right)) {
-                        canGo[i] = false;
-                        break;
-                    }
-                }
-            }
-        }
-
-        int winnerIndex = -1;
-        float bestScore = -1e9f;
-
-        for (std::size_t i = 0; i < cands.size(); ++i) {
-            if (!canGo[i]) continue;
-            const auto& c = cands[i];
-
-            float turnBonus = 0.0f;
-            switch (c.turn) {
-                case TurnType::Right:    turnBonus = 0.2f;  break;
-                case TurnType::Straight: turnBonus = 0.1f;  break;
-                case TurnType::Left:     turnBonus = 0.0f;  break;
-                case TurnType::UTurn:    turnBonus = -0.2f; break;
-            }
-
-            float score = c.priority * 10.0f + turnBonus * 5.0f - c.distToEnd * 0.1f;
-            if (score > bestScore) { bestScore = score; winnerIndex = static_cast<int>(i); }
-        }
-
-        for (std::size_t i = 0; i < cands.size(); ++i) {
-            const auto& ci = cands[i];
-            bool mustYield = !canGo[i] || (static_cast<int>(i) != winnerIndex);
-            if (!mustYield) continue;
-
-            float stopDist = ci.pathLen - (stopMargin + ci.v->config().length * 0.5f);
-            stopDist = std::max(stopDist, 0.0f);
-
-            auto itStop = intersectionStopForPath.find(ci.pathId);
-            if (itStop == intersectionStopForPath.end()) intersectionStopForPath[ci.pathId] = stopDist;
-            else itStop->second = std::min(itStop->second, stopDist);
         }
     }
+
     struct LaneVehicle { Vehicle* v; };
     std::unordered_map<int, std::unordered_map<int, std::vector<LaneVehicle>>> byPathLane;
 
@@ -1454,7 +1365,7 @@ void TrafficWorld::step(float dtSeconds)
         int lane = vPtr->laneIndex();
         if (lane < 0 || lane >= laneCount) lane = 0;
 
-        byPathLane[pathId][lane].push_back(LaneVehicle{vPtr.get()});
+        byPathLane[pathId][lane].push_back(LaneVehicle{ vPtr.get() });
     }
 
     for (auto& pk : byPathLane) {
@@ -1480,7 +1391,7 @@ void TrafficWorld::step(float dtSeconds)
             float leaderDist = 0.0f;
             float leaderLen  = 0.0f;
 
-            for (int idx = static_cast<int>(laneVec.size()) - 1; idx >= 0; --idx) {
+            for (int idx = (int)laneVec.size() - 1; idx >= 0; --idx) {
                 Vehicle* v = laneVec[idx].v;
 
                 float maxDistance = std::numeric_limits<float>::infinity();
@@ -1490,7 +1401,6 @@ void TrafficWorld::step(float dtSeconds)
                     float followerLen = v->config().length;
                     allowedCenter =
                         leaderDist - (leaderLen * 0.5f + followerLen * 0.5f + kMinGapMeters);
-
                     maxDistance = allowedCenter;
                 }
 
@@ -1498,16 +1408,90 @@ void TrafficWorld::step(float dtSeconds)
                     maxDistance = pathStopLimit;
                 }
 
-                const int beforePathId = (v->path() ? v->path()->id : -1);
-
-                v->step(dtSeconds, conditions_, trafficLights_, colors, maxDistance);
-
-                const int afterPathId = (v->path() ? v->path()->id : -1);
-                if (beforePathId == pathId && afterPathId != pathId) {
-                }
-                if (leader) {
+                bool greenAheadOnMyPath = false;
+                {
                     const Path* vp = v->path();
-                    if (vp && vp->id == pathId) {
+                    if (vp && !trafficLights_.empty() && trafficLights_.size() == colors.size()) {
+                        float dNow = v->traveledDistance();
+                        const float lookAhead = 35.0f;
+                        for (std::size_t li = 0; li < trafficLights_.size(); ++li) {
+                            const TrafficLight& tl = trafficLights_[li];
+                            if (tl.pathId != vp->id) continue;
+                            float delta = tl.distanceOnPath - dNow;
+                            if (delta < 0.0f || delta > lookAhead) continue;
+                            if (colors[li] == LightColor::Green) {
+                                greenAheadOnMyPath = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!leader) {
+                    const float alignTol = 0.5f;
+                    const float perpTol  = 6.0f;
+                    const float maxLookAhead = 120.0f;
+
+                    const Path* vp = v->path();
+                    if (vp) {
+                        Vec2 myPos = vp->positionAt(v->traveledDistance());
+                        Vec2 myDir = unitDirAt(vp, v->traveledDistance());
+                        float myHalf = v->config().length * 0.5f;
+                        int myLane = v->laneIndex();
+
+                        float bestFreeAlong = std::numeric_limits<float>::infinity();
+
+                        for (const Sample& s : samples) {
+                            if (s.v == v) continue;
+                            if (s.lane != myLane) continue;
+
+                            if (greenAheadOnMyPath && s.pathId != pathId) continue;
+
+                            float align = myDir.x*s.dir.x + myDir.y*s.dir.y;
+                            if (align < alignTol) continue;
+
+                            Vec2 to { s.pos.x - myPos.x, s.pos.y - myPos.y };
+
+                            float proj = to.x*myDir.x + to.y*myDir.y;
+                            if (proj <= 0.0f) continue;
+                            if (proj > maxLookAhead) continue;
+
+                            float perp = std::abs(to.x*myDir.y - to.y*myDir.x);
+                            if (perp > perpTol) continue;
+
+                            float freeAlong = proj - (s.halfLen + myHalf + kMinGapMeters);
+                            if (freeAlong < bestFreeAlong) bestFreeAlong = freeAlong;
+                        }
+
+                        if (std::isfinite(bestFreeAlong)) {
+                            float geomMax = v->traveledDistance() + std::max(bestFreeAlong, 0.0f);
+                            if (geomMax < maxDistance) maxDistance = geomMax;
+                        }
+                    }
+                }
+
+                const int beforePathId = (v->path() ? v->path()->id : -1);
+                v->step(dtSimSeconds, conditions_, trafficLights_, colors, maxDistance);
+                const int afterPathId  = (v->path() ? v->path()->id : -1);
+
+                {
+                    auto it = sampleIndex.find(v);
+                    if (it != sampleIndex.end()) {
+                        std::size_t si = it->second;
+                        const Path* sp = v->path();
+                        if (sp) {
+                            samples[si].pos     = sp->positionAt(v->traveledDistance());
+                            samples[si].dir     = unitDirAt(sp, v->traveledDistance());
+                            samples[si].halfLen = v->config().length * 0.5f;
+                            samples[si].lane    = v->laneIndex();
+                            samples[si].pathId  = sp->id;
+                        }
+                    }
+                }
+
+                if (leader) {
+                    const Path* vp2 = v->path();
+                    if (vp2 && vp2->id == pathId) {
                         float cur = v->traveledDistance();
                         if (std::isfinite(allowedCenter) && cur > allowedCenter) {
                             v->forceSetDistanceAndStop(std::max(allowedCenter, 0.0f));
@@ -1515,13 +1499,14 @@ void TrafficWorld::step(float dtSeconds)
                     }
                 }
 
-                leader = v;
-                leaderLen = v->config().length;
-
-                if (beforePathId == pathId && afterPathId != pathId) {
-                    leaderDist = p->length;
-                } else {
+                if (beforePathId == pathId && afterPathId == pathId) {
+                    leader     = v;
+                    leaderLen  = v->config().length;
                     leaderDist = v->traveledDistance();
+                } else {
+                    leader     = nullptr;
+                    leaderLen  = 0.0f;
+                    leaderDist = 0.0f;
                 }
             }
         }
@@ -1535,8 +1520,6 @@ void TrafficWorld::step(float dtSeconds)
         vehicles_.end()
     );
 }
-
-
 
 
 

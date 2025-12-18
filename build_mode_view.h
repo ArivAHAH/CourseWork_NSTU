@@ -75,6 +75,7 @@ private:
 
     struct Road {
         QVector<QPointF> points;
+        bool oneWayCCW = false;
     };
 
     struct Light {
@@ -91,6 +92,7 @@ private:
         bool finished;
         QPointF pos;
         qreal angleDeg;
+        int dirSign = +1;
     };
 
     struct Node {
@@ -157,6 +159,7 @@ private:
     void rebuildCars();
     QPointF roadPointAt(const Road& r, float t) const;
     void tickSimulation();
+    bool snapAndSplitToRoadNetwork(QPointF& ioPos, qreal radius);
 
     QRectF homeButtonRect() const;
     QRectF settingsButtonRect() const;
